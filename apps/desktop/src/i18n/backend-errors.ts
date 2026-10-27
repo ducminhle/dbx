@@ -82,6 +82,13 @@ const taggedAiCliErrorKeys: Record<string, string> = {
 };
 
 const exactMessageKeys: Record<string, string> = {
+  "Folder name must not contain a path": "sqlFileTree.folderNameInvalid",
+  "This folder name is excluded from the SQL file browser": "sqlFileTree.folderNameExcluded",
+  "The maximum SQL folder depth has been reached": "sqlFileTree.folderDepthExceeded",
+  "A file or folder with this name already exists": "sqlFileTree.folderNameExists",
+  "Only directories can be managed here": "sqlFileTree.directoryRequired",
+  "The opened root folder cannot be renamed or deleted": "sqlFileTree.rootFolderProtected",
+  "SQL folder is outside the opened root folder": "sqlFileTree.folderOutsideRoot",
   "Plugin update is in progress. Please try again after it finishes.": "pluginPlatform.updateInProgress",
   "Plugin update blocked by active operations. Please wait for them to finish.": "pluginPlatform.updateBlockedByOperations",
   [PHOENIX_DRIVER_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
@@ -90,6 +97,8 @@ const exactMessageKeys: Record<string, string> = {
 
 const patterns: [RegExp, string][] = [
   [/^Plugin update blocked by active connections: ([\s\S]+)$/, "pluginPlatform.updateBlockedByConnections"],
+  // src-tauri/src/commands/plugins.rs and crates/dbx-web/src/routes/plugins.rs uninstall guard.
+  [/^Cannot uninstall plugin '(.+?)' while these connections still use it: ([\s\S]+)$/, "pluginPlatform.uninstallBlockedByConnections"],
   // crates/dbx-plugin-runtime provenance guard (installer.rs / marketplace.rs)
   [/^Plugin update source change requires confirmation:/, "pluginPlatform.updateSourceChangeRequired"],
   [/^Plugin downgrade to version .+ is not allowed/, "pluginPlatform.updateDowngradeRejected"],
@@ -98,6 +107,8 @@ const patterns: [RegExp, string][] = [
   [/^System Java runtime was not found:/, "connection.systemJavaNotFound"],
   [/^Custom Java runtime path is empty\. Please choose a Java executable\.$/, "connection.customJavaPathEmpty"],
   [/^Agent requires Java 21, but DBX started it with an older Java runtime\. Use DBX managed JRE 21 or select a Java 21 executable in Driver Manager\./, "connection.agentJavaTooOld"],
+  // crates/dbx-plugin-runtime PLUGIN_JAVA_TOO_OLD_MESSAGE; callers may prefix it with connection context.
+  [/Plugin requires Java 21, but DBX started it with an older Java runtime\. Use DBX managed JRE 21 or select a Java 21 executable in Driver Manager\./, "connection.agentJavaTooOld"],
   [/^JDBC plugin is not installed\. Install the optional JDBC plugin to use this connection\.$/, "connection.jdbcPluginNotInstalled"],
   [/GBASEDBTSERVER[\s\S]*DBSERVERNAME[\s\S]*DBSERVERALIASES/, "connection.gbaseServerMismatch"],
   [/^ai\.configNameExists:(.+)$/, "ai.configNameExists"],
@@ -130,6 +141,7 @@ const patterns: [RegExp, string][] = [
 
   // SSH keyboard-interactive prompts (for example JumpServer TOTP).
   [/^(?:SSH layer \d+ failed:\s*)?SSH keyboard-interactive authentication was cancelled$/, "connection.sshTotpCancelled"],
+  [/^(?:SSH layer \d+ failed:\s*)?Failed to bind requested local port (\d+): ([\s\S]+)$/, "connection.sshLocalPortBindFailed"],
 
   // Query result export limits (crates/dbx-core/src/data/query_result_export.rs)
   [/^Streaming export is unsupported for this query\. Simplify it or use a supported driver\.$/, "exportProgress.streamingUnsupported"],
@@ -165,12 +177,19 @@ const patterns: [RegExp, string][] = [
 
   // Web auth rate limiting (crates/dbx-web/src/auth.rs)
   [/^Please try again in (\d+)s$/, "auth.rateLimited"],
+
+  // Dameng native dexp/dimp dump (crates/dbx-core/src/data/dameng_dump.rs)
+  [/^\[damengToolNotFound\]/, "damengDump.errors.toolNotFound"],
+  [/^\[damengConnectionRequired\]/, "damengDump.errors.connectionRequired"],
+  [/^\[damengPasswordMissing\]/, "damengDump.errors.passwordMissing"],
+  [/^\[damengUseridInvalid\]/, "damengDump.errors.useridInvalid"],
 ];
 
 // Named placeholders for each pattern's capture groups, in capture order.
 // A bare string is shorthand for a single capture group.
 const paramNames: Record<string, string | string[]> = {
   "pluginPlatform.updateBlockedByConnections": "labels",
+  "pluginPlatform.uninstallBlockedByConnections": ["plugin", "labels"],
   "connection.driverNotInstalled": "driver",
   "connection.jreNotInstalled": "jre",
   "ai.configNameExists": "name",
@@ -186,6 +205,7 @@ const paramNames: Record<string, string | string[]> = {
   "settings.tunnelsSocksUnsupportedAuth": "method",
   "settings.tunnelsSocksConnectRejected": "code",
   "settings.tunnelsSocksUnsupportedAddrType": "type",
+  "connection.sshLocalPortBindFailed": ["port", "error"],
   "driverStore.jreDirRemoveFailedWindows": ["path", "error"],
   "driverStore.jreDirRemoveFailed": ["path", "error"],
   "driverStore.jreInUseByDrivers": ["jre", "drivers"],

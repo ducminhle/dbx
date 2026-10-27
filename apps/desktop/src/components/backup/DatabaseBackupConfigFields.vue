@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import { computed, nextTick, ref, watch, type ComponentPublicInstance } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch, type ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { HelpTooltip } from "@/components/ui/tooltip";
 import { Check, ChevronDown, FolderOpen, Loader2, Search } from "@lucide/vue";
 import ConnectionGroupBadge from "@/components/connection/ConnectionGroupBadge.vue";
-import { databaseBackupFileNamePatternHasRunId, databaseBackupFileNamePatternIsValid, type DatabaseBackupExecutionConfig } from "@/lib/backup/scheduledDatabaseBackup";
+import { databaseBackupFileNamePatternHasRunId, databaseBackupFileNamePatternIsValid, supportsNavicatBackupFormat, type DatabaseBackupExecutionConfig } from "@/lib/backup/scheduledDatabaseBackup";
 import type { ConnectionConfig } from "@/types/database";
 import BackupTableSelector from "./BackupTableSelector.vue";
 import type { DatabaseBackupTableSelectionState } from "@/lib/backup/scheduledDatabaseBackup";
@@ -57,6 +57,13 @@ const selectedConnectionName = computed(() => props.connections.find((connection
 const selectedConnectionType = computed(() => props.connections.find((connection) => connection.id === props.draft.connectionId)?.db_type);
 // Database names and exact table lists belong to one connection, so they only apply when a single connection is selected.
 const multipleConnectionsSelected = computed(() => props.multiSelectConnections && props.selectedConnectionIds.length > 1);
+const selectedConnectionTypes = computed(() => {
+  const connectionIds = props.multiSelectConnections ? props.selectedConnectionIds : props.draft.connectionId ? [props.draft.connectionId] : [];
+  return connectionIds.map((connectionId) => props.connections.find((connection) => connection.id === connectionId)?.db_type);
+});
+const navicatFormatSupported = computed(() => supportsNavicatBackupFormat(selectedConnectionTypes.value));
+// A saved schedule may still carry `.nb3` after its connection changed to an unsupported type.
+const navicatFormatUnsupported = computed(() => props.draft.outputCompression === "nb3" && !navicatFormatSupported.value);
 const connectionPickerLabel = computed(() => (multipleConnectionsSelected.value ? t("databaseBackup.connectionsSelected", { count: props.selectedConnectionIds.length }) : selectedConnectionName.value));
 const fileNamePatternNeedsRunId = computed(() => multipleConnectionsSelected.value && !databaseBackupFileNamePatternHasRunId(props.draft.fileNamePattern));
 const filteredConnections = computed(() => {
@@ -103,13 +110,35 @@ function syncConnectionPickerWidth() {
   if (width > 0) connectionPickerWidth.value = width;
 }
 
+function handleScrollOutside(event: Event) {
+  if (!connectionPickerOpen.value) return;
+  const target = event.target;
+  if (target instanceof HTMLElement && target.closest?.('[data-slot="popover-content"]')) return;
+  connectionPickerOpen.value = false;
+}
+
 watch(connectionPickerOpen, async (open) => {
   if (!open) {
+    window.removeEventListener("scroll", handleScrollOutside, { capture: true });
     connectionSearch.value = "";
     return;
   }
+  window.addEventListener("scroll", handleScrollOutside, { capture: true, passive: true });
   await nextTick();
   syncConnectionPickerWidth();
+});
+
+watch(
+  () => props.draft,
+  () => {
+    connectionPickerOpen.value = false;
+    connectionSearch.value = "";
+    databaseSearch.value = "";
+  },
+);
+
+onBeforeUnmount(() => {
+  window.removeEventListener("scroll", handleScrollOutside, { capture: true });
 });
 
 watch(
@@ -131,7 +160,7 @@ watch(
             <ChevronDown class="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start" :collision-padding="24" class="w-[var(--reka-popover-trigger-width)] max-w-[calc(100vw-48px)] p-1" :style="connectionPickerWidth ? { width: `${connectionPickerWidth}px` } : undefined">
+        <PopoverContent align="start" :collision-padding="24" :hide-when-detached="true" class="w-[var(--reka-popover-trigger-width)] max-w-[calc(100vw-48px)] p-1" :style="connectionPickerWidth ? { width: `${connectionPickerWidth}px` } : undefined">
           <div class="relative">
             <Search class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input v-model="connectionSearch" data-backup-connection-search class="h-9 pl-8" :aria-label="t('databaseBackup.searchConnections')" :placeholder="t('databaseBackup.searchConnections')" />
@@ -216,11 +245,17 @@ watch(
     </div>
 
     <div class="space-y-2">
-      <Label>{{ t("databaseBackup.compression") }}</Label>
-      <label class="flex items-center gap-2 text-sm">
-        <input :checked="draft.outputCompression === 'gzip'" type="checkbox" class="h-4 w-4 accent-primary" @change="draft.outputCompression = ($event.target as HTMLInputElement).checked ? 'gzip' : 'none'" />
-        {{ t("databaseBackup.compressionGzip") }}
-      </label>
+      <Label>{{ t("databaseBackup.backupFormat") }}</Label>
+      <Select v-model="draft.outputCompression">
+        <SelectTrigger data-backup-output-format class="w-full sm:w-65" :aria-invalid="navicatFormatUnsupported"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">{{ t("databaseBackup.formatSql") }}</SelectItem>
+          <SelectItem value="gzip">{{ t("databaseBackup.compressionGzip") }}</SelectItem>
+          <SelectItem value="nb3" :disabled="!navicatFormatSupported">{{ t("databaseBackup.formatNb3") }}</SelectItem>
+        </SelectContent>
+      </Select>
+      <p v-if="navicatFormatUnsupported" data-backup-nb3-unsupported class="text-xs text-destructive">{{ t("databaseBackup.formatNb3Unsupported") }}</p>
+      <p v-else-if="draft.outputCompression === 'nb3'" data-backup-nb3-hint class="text-xs text-muted-foreground">{{ t("databaseBackup.formatNb3Hint") }}</p>
     </div>
 
     <div v-if="multipleConnectionsSelected" data-backup-multi-connection-hint class="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">

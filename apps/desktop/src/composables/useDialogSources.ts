@@ -6,7 +6,7 @@ import { useToast } from "@/composables/useToast";
 import { rememberExportPassphrase } from "@/lib/backend/exportPassphraseSession";
 import { hasSidebarLayoutEntries } from "@/lib/sidebar/sidebarLayout";
 import type { ConnectionConfigBundle } from "@/lib/connection/connectionConfigTransfer";
-import type { ConnectionConfig, SidebarLayout } from "@/types/database";
+import type { ConnectionConfig, DatabaseType, SidebarLayout } from "@/types/database";
 
 const showTransferDialog = ref(false);
 const transferTaskId = ref<string | null>(null);
@@ -22,6 +22,10 @@ const showMongoDatabaseDumpDialog = ref(false);
 const mongoDatabaseDumpPrefillConnectionId = ref("");
 const mongoDatabaseDumpPrefillDatabase = ref("");
 const mongoDatabaseDumpMode = ref<"dump" | "restore">("dump");
+const showDamengDumpDialog = ref(false);
+const damengDumpPrefillConnectionId = ref("");
+const damengDumpPrefillDatabase = ref("");
+const damengDumpMode = ref<"export" | "import">("export");
 const showTableDataGenerateDialog = ref(false);
 const tableDataGenerateSessionId = ref<string | null>(null);
 const showFieldLineageDialog = ref(false);
@@ -41,7 +45,7 @@ const configConnectionSelectList = ref<ConnectionConfig[]>([]);
 const configConnectionSelectLayout = ref<SidebarLayout | null>(null);
 const pendingExportConnectionIds = ref<string[]>([]);
 const pendingImportPreview = ref<ConnectionConfigBundle | null>(null);
-const pendingImportSource = ref<"dbx" | "navicat" | "dbeaver" | "datagrip">("dbx");
+const pendingImportSource = ref<"dbx" | "navicat" | "dbeaver" | "datagrip" | "rdm">("dbx");
 const applyingImportSelection = ref(false);
 
 const transferPrefillConnectionId = ref("");
@@ -92,6 +96,7 @@ const tableDataGeneratePrefillDatabase = ref("");
 const tableDataGeneratePrefillSchema = ref("");
 const tableDataGeneratePrefillTable = ref("");
 const lineagePrefillConnectionId = ref("");
+const lineagePrefillDatabaseType = ref<DatabaseType>();
 const lineagePrefillDatabase = ref("");
 const lineagePrefillSchema = ref("");
 const lineagePrefillTable = ref("");
@@ -329,6 +334,18 @@ export function useDialogSources() {
     );
 
     watch(
+      () => connectionStore.damengDumpSource,
+      (source) => {
+        if (!source) return;
+        damengDumpPrefillConnectionId.value = source.connectionId;
+        damengDumpPrefillDatabase.value = source.database;
+        damengDumpMode.value = source.mode;
+        showDamengDumpDialog.value = true;
+        connectionStore.damengDumpSource = null;
+      },
+    );
+
+    watch(
       () => connectionStore.tableDataGenerateSource,
       (v) => {
         if (v) {
@@ -352,6 +369,7 @@ export function useDialogSources() {
       (v) => {
         if (v) {
           lineagePrefillConnectionId.value = v.connectionId;
+          lineagePrefillDatabaseType.value = v.databaseType;
           lineagePrefillDatabase.value = v.database;
           lineagePrefillSchema.value = v.schema ?? "";
           lineagePrefillTable.value = v.tableName;
@@ -415,7 +433,7 @@ export function useDialogSources() {
     showConfigConnectionSelectDialog.value = true;
   }
 
-  function importSuccessMessage(source: "dbx" | "navicat" | "dbeaver" | "datagrip", count: number, keychainFilled = 0) {
+  function importSuccessMessage(source: "dbx" | "navicat" | "dbeaver" | "datagrip" | "rdm", count: number, keychainFilled = 0) {
     if (count <= 0) return t("configExport.importNone");
     if (source === "navicat") return t("configExport.importNavicatSuccess", { count });
     if (source === "dbeaver") return t("configExport.importDbeaverSuccess", { count });
@@ -423,7 +441,7 @@ export function useDialogSources() {
     return t("configExport.importSuccess", { count });
   }
 
-  async function finishImport(source: "dbx" | "navicat" | "dbeaver" | "datagrip", count: number, layout?: SidebarLayout) {
+  async function finishImport(source: "dbx" | "navicat" | "dbeaver" | "datagrip" | "rdm", count: number, layout?: SidebarLayout) {
     let keychainFilled = 0;
     if (source === "datagrip" && count > 0) {
       keychainFilled = await connectionStore.applyDataGripKeychainPasswords();
@@ -507,7 +525,7 @@ export function useDialogSources() {
     if (!open) showConfigPassphraseDialog.value = true;
   }
 
-  async function onImportClick(source: "dbx" | "navicat" | "dbeaver" | "datagrip" = "dbx") {
+  async function onImportClick(source: "dbx" | "navicat" | "dbeaver" | "datagrip" | "rdm" = "dbx") {
     try {
       const result = await connectionStore.readImportFile(source);
       if (!result) return;
@@ -522,7 +540,7 @@ export function useDialogSources() {
       }
       const preview = await connectionStore.parseConnectionsImport(result.content, null);
       pendingImportPreview.value = preview;
-      if (source === "dbx") {
+      if (source === "dbx" || source === "rdm") {
         openConnectionSelect("import", preview.connections, preview.layout);
         return;
       }
@@ -601,6 +619,10 @@ export function useDialogSources() {
     mongoDatabaseDumpPrefillConnectionId,
     mongoDatabaseDumpPrefillDatabase,
     mongoDatabaseDumpMode,
+    showDamengDumpDialog,
+    damengDumpPrefillConnectionId,
+    damengDumpPrefillDatabase,
+    damengDumpMode,
     showTableDataGenerateDialog,
     tableDataGenerateSessionId,
     showFieldLineageDialog,
@@ -667,6 +689,7 @@ export function useDialogSources() {
     tableDataGeneratePrefillSchema,
     tableDataGeneratePrefillTable,
     lineagePrefillConnectionId,
+    lineagePrefillDatabaseType,
     lineagePrefillDatabase,
     lineagePrefillSchema,
     lineagePrefillTable,

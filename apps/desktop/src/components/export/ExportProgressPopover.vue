@@ -3,10 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { Loader2, Check, CheckCircle2, XCircle, AlertCircle, X, FileDown, Database, DatabaseBackup, FileCode2, ArrowRightLeft, Layers3, GitCompareArrows, ChevronRight, FolderOpen, Copy } from "@lucide/vue";
+import { Loader2, Check, CheckCircle2, XCircle, AlertCircle, Clock, X, FileDown, Database, DatabaseBackup, FileCode2, ArrowRightLeft, Layers3, GitCompareArrows, ChevronRight, FolderOpen, Copy } from "@lucide/vue";
 import { formatDataTransferDuration, useExportTracker, type ExportTask } from "@/composables/useExportTracker";
-import { dataTransferFailureCopyText, sqlFileFailureCopyText } from "@/components/export/failureDetailCopyText";
+import { dataTransferFailureCopyText } from "@/components/export/failureDetailCopyText";
 import SqlFileProgressIndicator from "@/components/sql-file/SqlFileProgressIndicator.vue";
+import FailureDetailsList from "@/components/sql-file/FailureDetailsList.vue";
 import { translateBackendError } from "@/i18n/backend-errors";
 import { useToast } from "@/composables/useToast";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
@@ -211,6 +212,8 @@ const rowsText = (task: ExportTask) => {
 };
 
 const taskStatusText = (task: ExportTask) => {
+  if (task.status === "Queued") return t("exportProgress.queued");
+  if (task.status === "Unknown") return t("exportProgress.unknown");
   if (task.status === "Cancelling") return t("databaseBackup.cancelling");
   if (task.kind !== "schema-diff" && task.kind !== "data-compare") return "";
   if (task.status === "Running") return t("exportProgress.compareRunning");
@@ -248,6 +251,10 @@ const statusIcon = (task: ExportTask) => {
     if (task.kind === "schema-diff" || task.kind === "data-compare") return GitCompareArrows;
   }
   switch (task.status) {
+    case "Queued":
+      return Clock;
+    case "Unknown":
+      return AlertCircle;
     case "Running":
     case "Writing":
     case "Cancelling":
@@ -315,7 +322,7 @@ function failureDetailCount(task: ExportTask) {
 }
 
 function hasUnlistedTaskError(task: ExportTask) {
-  if (task.status !== "Error" || !task.errorMessage) return false;
+  if ((task.status !== "Error" && task.status !== "Unknown") || !task.errorMessage) return false;
   if (task.kind === "sql-file") return !(task.sqlFileFailures ?? []).some((failure) => failure.error === task.errorMessage);
   if (task.kind === "data-transfer") return !(task.transferFailures ?? []).some((failure) => failure.error === task.errorMessage);
   return true;
@@ -323,10 +330,6 @@ function hasUnlistedTaskError(task: ExportTask) {
 
 function dataTransferFailureDetailKey(taskId: string, table: string): string {
   return `data-transfer:${taskId}:${table}`;
-}
-
-function sqlFileFailureDetailKey(taskId: string, fileIndex: number | undefined, statementIndex: number): string {
-  return `sql-file:${taskId}:${fileIndex ?? -1}:${statementIndex}`;
 }
 
 async function copyFailureDetail(text: string, key: string): Promise<void> {
@@ -405,7 +408,7 @@ function openTask(task: ExportTask): void {
             </div>
 
             <div class="min-w-0 text-muted-foreground">
-              <span class="break-words tabular-nums">{{ rowsText(task) }}</span>
+              <span v-if="task.status !== 'Queued'" class="break-words tabular-nums">{{ rowsText(task) }}</span>
               <span v-if="task.kind === 'sql-file' && task.elapsedMs !== undefined" class="ml-1 tabular-nums">{{ t("exportProgress.elapsed", { duration: formatDataTransferDuration(task.elapsedMs) }) }}</span>
               <span v-if="task.kind !== 'data-transfer' && task.startedAt !== undefined" class="ml-1 tabular-nums">{{ elapsedText(task) }}</span>
               <span v-if="taskStatusText(task)" class="ml-1 font-medium text-primary">{{ taskStatusText(task) }}</span>
@@ -413,15 +416,21 @@ function openTask(task: ExportTask): void {
                 {{ translateBackendError(t, task.errorMessage!) }}
               </span>
               <template v-if="(task.kind === 'data-transfer' || task.kind === 'sql-file') && failureDetailCount(task) > 0">
-                <button class="mt-1.5 flex items-center gap-1 text-xs font-medium text-foreground hover:text-primary" :aria-expanded="failureDetailsExpanded(task.exportId)" @click="toggleFailureDetails(task.exportId)">
-                  <ChevronRight class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-90': failureDetailsExpanded(task.exportId) }" />
-                  {{ failureDetailsExpanded(task.exportId) ? t("exportProgress.hideFailureDetails") : t("exportProgress.showFailureDetails", { count: failureDetailCount(task) }) }}
-                </button>
-                <div v-if="failureDetailsExpanded(task.exportId)" class="mt-1.5 max-h-44 overflow-y-auto rounded border border-destructive/20 bg-destructive/5">
-                  <template v-if="task.kind === 'data-transfer'">
+                <!-- SQL file failures share one implementation with the execution
+                     dialog (selection, copy and export of the complete
+                     statements); transfer failures keep their own list. -->
+                <FailureDetailsList v-if="task.kind === 'sql-file'" class="mt-1.5" :execution-id="task.exportId" :failures="task.sqlFileFailures ?? []" :omitted="task.sqlFileFailuresOmitted ?? 0" :file-name-hint="task.tableName" variant="popover" />
+                <template v-else>
+                  <button class="mt-1.5 flex items-center gap-1 text-xs font-medium text-foreground hover:text-primary" :aria-expanded="failureDetailsExpanded(task.exportId)" @click="toggleFailureDetails(task.exportId)">
+                    <ChevronRight class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-90': failureDetailsExpanded(task.exportId) }" />
+                    {{ failureDetailsExpanded(task.exportId) ? t("exportProgress.hideFailureDetails") : t("exportProgress.showFailureDetails", { count: failureDetailCount(task) }) }}
+                  </button>
+                  <div v-if="failureDetailsExpanded(task.exportId)" class="mt-1.5 max-h-44 overflow-y-auto rounded border border-destructive/20 bg-destructive/5">
                     <div v-for="failure in task.transferFailures" :key="failure.table" class="border-b border-destructive/15 px-2.5 py-2 last:border-b-0">
                       <div class="flex min-w-0 items-start justify-between gap-2">
-                        <div class="min-w-0 break-all font-mono font-medium text-foreground">{{ failure.table }}</div>
+                        <div class="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
+                          <span class="truncate" :title="failure.table">{{ failure.table }}</span>
+                        </div>
                         <button
                           type="button"
                           class="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-muted"
@@ -433,36 +442,12 @@ function openTask(task: ExportTask): void {
                           <Copy v-else class="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" aria-hidden="true" />
                         </button>
                       </div>
-                      <div class="mt-0.5 select-text whitespace-pre-wrap break-words text-destructive">{{ failure.error }}</div>
-                      <div v-if="failure.truncated" class="mt-0.5 text-muted-foreground">{{ t("exportProgress.failureDetailTruncated") }}</div>
-                    </div>
-                    <div v-if="task.transferFailuresOmitted" class="px-2.5 py-2 text-muted-foreground">{{ t("exportProgress.failureDetailsOmitted", { count: task.transferFailuresOmitted }) }}</div>
-                  </template>
-                  <template v-else>
-                    <div v-for="failure in task.sqlFileFailures" :key="`${failure.fileIndex ?? -1}:${failure.statementIndex}`" class="border-b border-destructive/15 px-2.5 py-2 last:border-b-0">
-                      <div class="flex min-w-0 items-start justify-between gap-2">
-                        <div class="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
-                          <span class="shrink-0">#{{ failure.statementIndex }}</span>
-                          <span v-if="failure.fileName" class="truncate text-muted-foreground" :title="failure.fileName">{{ failure.fileName }}</span>
-                        </div>
-                        <button
-                          type="button"
-                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-muted"
-                          :title="copiedFailureDetailKey === sqlFileFailureDetailKey(task.exportId, failure.fileIndex, failure.statementIndex) ? t('exportProgress.failureDetailCopied') : t('exportProgress.copyFailureDetail')"
-                          :aria-label="copiedFailureDetailKey === sqlFileFailureDetailKey(task.exportId, failure.fileIndex, failure.statementIndex) ? t('exportProgress.failureDetailCopied') : t('exportProgress.copyFailureDetail')"
-                          @click.stop="copyFailureDetail(sqlFileFailureCopyText(failure, translateBackendError(t, failure.error)), sqlFileFailureDetailKey(task.exportId, failure.fileIndex, failure.statementIndex))"
-                        >
-                          <Check v-if="copiedFailureDetailKey === sqlFileFailureDetailKey(task.exportId, failure.fileIndex, failure.statementIndex)" class="h-3.5 w-3.5 text-green-500" aria-hidden="true" />
-                          <Copy v-else class="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" aria-hidden="true" />
-                        </button>
-                      </div>
-                      <div v-if="failure.statementSummary" class="mt-0.5 select-text whitespace-pre-wrap break-words font-mono text-foreground">{{ failure.statementSummary }}</div>
                       <div class="mt-0.5 select-text whitespace-pre-wrap break-words text-destructive">{{ translateBackendError(t, failure.error) }}</div>
                       <div v-if="failure.truncated" class="mt-0.5 text-muted-foreground">{{ t("exportProgress.failureDetailTruncated") }}</div>
                     </div>
-                    <div v-if="task.sqlFileFailuresOmitted" class="px-2.5 py-2 text-muted-foreground">{{ t("exportProgress.failureDetailsOmitted", { count: task.sqlFileFailuresOmitted }) }}</div>
-                  </template>
-                </div>
+                    <div v-if="task.transferFailuresOmitted" class="px-2.5 py-2 text-muted-foreground">{{ t("exportProgress.failureDetailsOmitted", { count: task.transferFailuresOmitted }) }}</div>
+                  </div>
+                </template>
               </template>
             </div>
           </div>
@@ -476,7 +461,7 @@ function openTask(task: ExportTask): void {
               <FolderOpen class="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
             </button>
             <button
-              v-if="isActive(task.status) && task.canCancel !== false"
+              v-if="(isActive(task.status) || task.status === 'Queued') && task.canCancel !== false"
               class="flex h-6 w-6 items-center justify-center rounded hover:bg-muted disabled:cursor-not-allowed"
               :disabled="task.status === 'Cancelling'"
               :title="task.status === 'Cancelling' ? t('databaseBackup.cancelling') : t('exportProgress.cancel')"
@@ -485,7 +470,7 @@ function openTask(task: ExportTask): void {
               <Loader2 v-if="task.status === 'Cancelling'" class="h-3.5 w-3.5 animate-spin text-primary" />
               <X v-else class="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
             </button>
-            <button v-else-if="!isActive(task.status)" class="flex h-6 w-6 items-center justify-center rounded hover:bg-muted" :title="t('exportProgress.delete')" @click="removeTask(task.exportId)">
+            <button v-else-if="isFinished(task.status) || task.status === 'Unknown'" class="flex h-6 w-6 items-center justify-center rounded hover:bg-muted" :title="t('exportProgress.delete')" @click="removeTask(task.exportId)">
               <X class="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
             </button>
           </div>
